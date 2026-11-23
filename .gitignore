@@ -1,0 +1,37 @@
+*.ipynb
+past_code_fromHW3/
+# 1. Python & PyTorch 暫存與權重檔
+__pycache__/
+*.py[cod]
+*$py.class
+*.pt
+*.pth
+*.onnx
+
+# 2. 資料集與二進位 Shard (避免上傳數 GB 資料)
+hw4p1-data/
+hw4p1_data/
+*.bin
+manifest.json
+
+# 3. 訓練日誌、Checkpoints 與 W&B 紀錄
+checkpoints/
+runs/
+wandb/
+results/
+*.log
+
+# 4. Gradescope 提交檔與說明 PDF
+*.tar
+*.tar.gz
+handin/
+*.pdf
+
+# 5. Jupyter Notebook 隱藏暫存檔 (Notebook 本身會正常推送)
+.ipynb_checkpoints/
+
+# 6. IDE 設定與敏感環境變數檔
+.vscode/
+.idea/
+.DS_Store
+.env
