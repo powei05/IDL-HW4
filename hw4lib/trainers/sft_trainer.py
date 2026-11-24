@@ -25,7 +25,10 @@ class SFTTrainer(BaseTrainer):
         self.amp_enabled = bool(config["training"].get("amp", True)) and torch.device(self.device).type == "cuda"
         self.scaler = torch.amp.GradScaler("cuda", enabled=self.amp_enabled)
         # TODO: Use summed cross-entropy, ignoring labels equal to -100.
-        self.criterion = None  # TODO
+        self.criterion = nn.CrossEntropyLoss(
+            ignore_index = -100,
+            reduction = "sum"
+        )  # TODO
 
     def _init_experiment(self, run_name, config_file):
         """Provided: use a new output directory, or explicitly resume an existing run."""
@@ -112,21 +115,134 @@ class SFTTrainer(BaseTrainer):
         return inputs, labels, count
 
     def _train_epoch(self, dataloader):
-        """Accumulate summed losses; normalize gradients by the cycle's token count.
+        """Accumulate summed losses; normalize gradients by the cycle's token count."""
 
-        Handle a partial final accumulation cycle. Unscale before clipping.
-        Advance the scheduler only when the optimizer step ran.
-        """
-        # Provided: keep this call when implementing the training loop.
         self._bind_model_to_active_wandb()
-        # TODO: Implement one training epoch using the instructions above.
-        raise NotImplementedError("Complete _train_epoch")
+
+        if self.optimizer is None or len(dataloader) == 0:
+            raise ValueError("Optimizer is not initialized or dataloader is empty")
+
+        accumulation = self.config["training"]["gradient_accumulation_steps"]
+        if (
+            not isinstance(accumulation, int)
+            or isinstance(accumulation, bool)
+            or accumulation <= 0
+        ):
+            raise ValueError("Invalid gradient_accumulation_steps")
+
+        clip = self.config["training"]["gradient_clip"]
+        if not math.isfinite(clip) or clip <= 0:
+            raise ValueError("Invalid gradient_clip")
+
+        self.model.train()
+        self.optimizer.zero_grad(set_to_none=True)
+
+        total_loss = 0.0
+        total_tokens = 0
+        cycle_tokens = 0
+
+        bar = tqdm(dataloader)
+
+        for index, batch in enumerate(bar):
+
+            inputs, labels, count = self._prepare_batch(batch)
+
+            with torch.autocast(
+                device_type=torch.device(self.device).type,
+                enabled=self.amp_enabled
+            ):
+                logits, _ = self.model(inputs)
+
+                loss = self.criterion(
+                    logits.reshape(-1, logits.size(-1)),
+                    labels.reshape(-1)
+                )
+
+            if not torch.isfinite(loss):
+                raise FloatingPointError("Non-finite training loss")
+
+            self.scaler.scale(loss).backward()
+
+            total_loss += loss.item()
+            total_tokens += count
+            cycle_tokens += count
+
+            reached_accumulation_boundary = (
+                (index + 1) % accumulation == 0
+            )
+
+            reached_final_batch = (
+                (index + 1) == len(dataloader)
+            )
+
+            if reached_accumulation_boundary or reached_final_batch:
+
+                # Unscale gradients before clipping
+                self.scaler.unscale_(self.optimizer)
+
+                # Normalize by supervised token count
+                for parameter in self.model.parameters():
+                    if parameter.grad is not None:
+                        parameter.grad.div_(cycle_tokens)
+
+                # Clip gradient norm
+                torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(),
+                    max_norm=clip
+                )
+
+                # Apply optimizer step through gradient scaler
+                old_scale = self.scaler.get_scale()
+
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+
+                optimizer_step_ran = (
+                    self.scaler.get_scale() >= old_scale
+                )
+
+                if optimizer_step_ran:
+                    self.global_optimizer_step += 1
+
+                    if self.scheduler is not None:
+                        self.scheduler.step()
+
+                self.optimizer.zero_grad(set_to_none=True)
+                cycle_tokens = 0
+
+            bar.set_postfix(
+                response_ce=total_loss / total_tokens
+            )
+
+        return self._metrics(total_loss, total_tokens), {}
+
+        #raise NotImplementedError("Complete _train_epoch")
 
     @torch.inference_mode()
     def _validate_epoch(self, dataloader):
         """Compute response CE from total NLL / total supervised tokens."""
         # TODO: Evaluate without gradients; exclude prompt and padding targets.
-        raise NotImplementedError("Complete _validate_epoch")
+        self.model.eval()
+
+        total_loss = 0.0
+        total_tokens = 0
+
+        for batch in dataloader:
+
+            inputs, labels, count = self._prepare_batch(batch)
+
+            logits, _ = self.model(inputs)
+
+            loss = self.criterion(
+                logits.reshape(-1, logits.size(-1)),
+                labels.reshape(-1)
+            )
+
+            total_loss += loss.item()
+            total_tokens += count
+
+        return self._metrics(total_loss, total_tokens)
+        #raise NotImplementedError("Complete _validate_epoch")
 
     @torch.inference_mode()
     def generate(self, records):
@@ -136,7 +252,80 @@ class SFTTrainer(BaseTrainer):
         Limit total context and stop at generated EOS, excluding prompt text.
         """
         # TODO: Use SequenceGenerator and the model's score/score_cached methods.
-        raise NotImplementedError("Complete generate")
+        self.model.eval()
+
+        predictions = []
+
+        budget = self.config["generation"].get("max_new_tokens", 128)
+
+        if (
+            not isinstance(budget, int)
+            or isinstance(budget, bool)
+            or budget <= 0
+        ):
+            raise ValueError("max_new_tokens must be a positive integer")
+
+        for record in records:
+
+            # Build prompt from RDF triples only
+            prompt_ids = self.tokenizer.encode(
+                format_webnlg_prompt(record["triples"])
+            )
+
+            if not prompt_ids or len(prompt_ids) >= self.model.max_len:
+                raise ValueError("Invalid prompt length")
+
+            # Convert prompt to tensor
+            prompt = torch.tensor(
+                [prompt_ids],
+                dtype=torch.long,
+                device=self.device
+            )
+
+            # Limit total generation length
+            maximum_sequence_length = min(
+                self.model.max_len,
+                len(prompt_ids) + budget
+            )
+
+            # Use KV cache only for RoPE
+            if self.model.use_rope:
+                cached_score_function = self.model.score_cached
+            else:
+                cached_score_function = None
+
+            # Initialize greedy decoder
+            decoder = SequenceGenerator(
+                score_fn=self.model.score,
+                tokenizer=self.tokenizer,
+                max_length=maximum_sequence_length,
+                device=self.device,
+                cache_score_fn=cached_score_function
+            )
+
+            # Generate response
+            sequences, scores = decoder.generate_greedy(prompt)
+
+            # Remove tokens after generated EOS
+            sequence = decoder.post_process_sequence(
+                sequences[0],
+                self.tokenizer,
+                start_index=len(prompt_ids)
+            )
+
+            # Remove prompt tokens
+            generated_tokens = sequence[len(prompt_ids):]
+
+            # Decode response only
+            prediction = self.tokenizer.decode(
+                generated_tokens,
+                skip_special_tokens=True
+            )
+
+            predictions.append(prediction)
+
+        return predictions        
+        #raise NotImplementedError("Complete generate")
 
     def evaluate(self, dataloader, records=None):
         """Provided: combine teacher-forced response loss with generated-text metrics."""
@@ -155,4 +344,37 @@ class SFTTrainer(BaseTrainer):
         Log token loss and generation scores as different quantities.
         """
         # TODO: Run training/evaluation, update best Kaggle score, log, and save checkpoints.
+        if not dev_records:
+            raise ValueError("dev_records must not be empty")
+
+        for epoch in range(self.current_epoch, self.config["training"]["epochs"]):
+
+            sampler = train_dataloader.sampler
+
+            if hasattr(sampler, "set_epoch"):
+                sampler.set_epoch(epoch)
+
+            train_metrics, _ = self._train_epoch(train_dataloader)
+
+            dev_metrics = self.evaluate(
+                val_dataloader,
+                dev_records
+            )
+
+            improved = dev_metrics["kaggle_score"] > self.best_metric
+
+            if improved:
+                self.best_metric = dev_metrics["kaggle_score"]
+
+            # Log training and development results for epoch + 1
+            # Use the existing trainer logging method here.
+
+            self.current_epoch = epoch + 1
+
+            if improved:
+                # Save best.pth using the existing checkpoint method
+                pass
+
+        # Save last.pth and write history.json
+        # Use the existing trainer methods here.
         raise NotImplementedError("Complete train")

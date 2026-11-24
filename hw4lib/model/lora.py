@@ -24,11 +24,47 @@ class LoRALinear(nn.Module):
         self.dropout = nn.Dropout(dropout)
         # TODO: Create trainable A and B on the base weight's device and dtype.
         # Initialize A, zero B, and freeze the original projection.
-        raise NotImplementedError("Complete LoRALinear.__init__")
+        super().__init__()
+        if not isinstance(base, nn.Linear):
+            raise TypeError("base must be nn.Linear")
+        if isinstance(rank, bool) or not isinstance(rank, int) or rank <= 0:
+            raise ValueError("rank must be a positive integer")
+        if not math.isfinite(alpha) or alpha <= 0 or not 0 <= dropout < 1:
+            raise ValueError("Require positive alpha and 0 <= dropout < 1")
+        self.base, self.rank, self.alpha = base, rank, float(alpha)
+        self.dropout = nn.Dropout(dropout)
+
+        self.lora_A = nn.Parameter(
+            self.base.weight.new_empty(
+                rank,
+                self.base.in_features
+            )
+        )
+        self.lora_B = nn.Parameter(
+            self.base.weight.new_zeros(
+                self.base.out_features,
+                rank
+            )
+        )
+        nn.init.kaiming_uniform_(
+            self.lora_A,
+            a = math.sqrt(5)
+        )
+        for parameter in self.base.parameters():
+            parameter.requires_grad_(False)
+
+
+        #raise NotImplementedError("Complete LoRALinear.__init__")
 
     def forward(self, x):
         # TODO: Add the scaled low-rank update to the original linear output.
-        raise NotImplementedError("Complete LoRALinear.forward")
+        base_output = self.base(x)
+        lora_output = F.linear(
+            F.linear(self.dropout(x), self.lora_A),
+            self.lora_B
+        )
+        return base_output + (self.alpha / self.rank) * lora_output
+        #raise NotImplementedError("Complete LoRALinear.forward")
 
 
 def inject_lora(model, *, rank, alpha, dropout, targets=("q_proj", "v_proj")):
@@ -40,8 +76,41 @@ def inject_lora(model, *, rank, alpha, dropout, targets=("q_proj", "v_proj")):
         raise ValueError("LoRA is already installed")
     # TODO: Find nn.Linear leaves whose names match targets; reject any unmatched target.
     # Build replacements before modifying the model. Freeze base parameters.
-    raise NotImplementedError("Complete inject_lora")
+    replacements = []
+    matched_targets = set()
 
+    for name, module in model.named_modules():
+        if isinstance(module, nn.Linear):
+            leaf_name = name.split(".")[-1]
+            if leaf_name in targets:
+                replacements.append((name, module))
+                matched_targets.add(leaf_name)
+    missing = set(targets) - matched_targets
+    if missing:
+        raise ValueError(f"Unmatched targets: {missing}")
+
+    new_modules = []
+    for name, module in replacements:
+        lora_module = LoRALinear(
+            base = module,
+            rank = rank,
+            alpha = alpha,
+            dropout = dropout
+        )
+        new_modules.append((name, lora_module))
+
+    for name, lora_module in new_modules:
+        parent_name, _, child_name = name.rpartition(".")
+        parent = (
+            model.get_submodule(parent_name)
+            if parent_name
+            else model
+        )
+        setattr(parent, child_name, lora_module)
+    #raise NotImplementedError("Complete inject_lora")
+    for name, param in model.named_parameters():
+        param.requires_grad(name.endswith((".lora_A", ".lora_B")))
+    return [name for name, _ in new_modules]
 
 def _adapter_config(model):
     return {name: {"rank": module.rank, "alpha": module.alpha,

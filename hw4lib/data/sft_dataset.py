@@ -39,19 +39,49 @@ class SFTDataset(Dataset):
         """Return shifted input_ids and labels; supervise response and EOS only."""
         # TODO: Join prompt, response, and EOS. Shift once for next-token prediction.
         # The first response target sits at index len(prompt) - 1.
+        tokens = prompt + answer + [self.tokenizer.eos_id]
+
+        input_ids = torch.tensor(tokens[:-1], dtype = torch.long)
+        labels = torch.tensor(tokens[1:], dtype = torch.long)
+
+        labels[:len(prompt) - 1] = -100
+        return {
+            "input_ids": input_ids,
+            "labels": labels,
+        }
         raise NotImplementedError("Complete _make_example")
 
     def __len__(self):
         # TODO: Return the number of prompt/response pairs.
-        raise NotImplementedError("Complete __len__")
+        return len(self.examples)
+        #raise NotImplementedError("Complete __len__")
 
     def __getitem__(self, index):
         # TODO: Return one example without allowing the caller to alter stored tensors.
-        raise NotImplementedError("Complete __getitem__")
+        example = self.eamples[index]
+        return {
+            "input_ids": example["input_ids"].clone(),
+            "labels": example["labels"].clone(),
+        }
+        #raise NotImplementedError("Complete __getitem__")
 
     def collate_fn(self, examples):
         """Right-pad inputs with EOS, and labels with -100 (not EOS)."""
         if not examples:
             raise ValueError("Cannot collate an empty batch")
-        # TODO: Pad each field to the longest example in this batch.
-        raise NotImplementedError("Complete collate_fn")
+        # TODO: Pad each field to the longest example in this batch
+        input_ids = torch.nn.utils.rnn.pad_sequence(
+            [example["input_ids"] for example in examples],
+            btch_first = True,
+            padding_value = self.tokenizer.eos_id
+        )
+        labels = torch.nn.utils.rnn.pad_sequence(
+            [example["labels"] for example in examples],
+            batch_first = True,
+            padding_value = -100
+        )
+        return {
+            "input_ids": input_ids,
+            "labels": labels,
+        }
+        #raise NotImplementedError("Complete collate_fn")
