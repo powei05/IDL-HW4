@@ -234,7 +234,7 @@ class DecoderOnlyTransformer(nn.Module):
         causal_mask = None
         if not self.use_rope:
             causal_mask = CausalMask(
-                padded_targets.size(1)
+                padded_targets
             ).to(padded_targets.device)
 
         # TODO: Apply embedding and dropout. Apply additive positional

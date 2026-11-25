@@ -89,11 +89,15 @@ class SelfAttentionLayer(nn.Module):
             x (torch.Tensor): Output tensor, shape (batch_size, seq_len, d_model)
             mha_attn_weights (torch.Tensor): Attention weights, shape (batch_size, seq_len, seq_len)   
         '''
+        residual = x
+        normalized = self.norm(x)
         if self.use_rope:
-            # Rotary attention returns three values, not two: the output, the
-            # averaged attention weights, and a key/value cache. This path does
-            # not cache, so the third value is discarded here.
-            x, mha_attn_weights = NotImplementedError, NotImplementedError
+            attention_output, mha_attn_weights, _ = self.mha(
+                normalized,
+                key_padding_mask=key_padding_mask,
+                attn_mask=attn_mask,
+                use_cache=False,
+            )
         else:
             # DO NOT MODIFY
             # This is the additive-positional path used by HW4P2 and is not
@@ -107,7 +111,8 @@ class SelfAttentionLayer(nn.Module):
                 attn_mask            = attn_mask,
                 average_attn_weights = True,
             )
-        raise NotImplementedError
+            attention_output = x
+        return residual + self.dropout(attention_output), mha_attn_weights
 
     def forward_cached(
         self,
@@ -211,4 +216,5 @@ class FeedForwardLayer(nn.Module):
         '''
         
         x = x + self.dropout(self.ffn(self.norm(x)))
+        return x
         raise NotImplementedError

@@ -71,7 +71,7 @@ class LMTrainer(BaseTrainer):
             label_smoothing = self.config["training"]["label_smoothing"],
             reduction="sum"
         )
-        raise NotImplementedError
+        #raise NotImplementedError
 
 
     @staticmethod
@@ -230,8 +230,8 @@ class LMTrainer(BaseTrainer):
                 old_scale = self.scaler.get_scale()
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
-
-                optimizer_step_ran = self._optimizer_step_ran(old_scale)
+                new_scale = self.scaler.get_scale()
+                optimizer_step_ran = self._optimizer_step_ran(old_scale, new_scale)
                 #raise NotImplementedError
                 # DO NOT MODIFY: count only optimizer updates that AMP did not
                 # skip because of an overflow.

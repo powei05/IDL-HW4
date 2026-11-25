@@ -92,6 +92,8 @@ class RotaryPositionalEncoding(nn.Module):
         super().__init__()
         if head_dim % 2 != 0:
             raise ValueError(f"head_dim must be even for RoPE, but got {head_dim}")
+        if max_len <= 0:
+            raise ValueError(f"max_len must be positive, but got {max_len}")
         self.head_dim = head_dim
         self.create_rope_table(head_dim, max_len, base)
 
@@ -145,6 +147,11 @@ class RotaryPositionalEncoding(nn.Module):
 
     def forward(self, x: torch.Tensor, start_pos: int = 0):
         # Get sequence length
+        if x.ndim != 4 or x.size(-1) != self.head_dim:
+            raise ValueError(
+                f"Expected x shape (batch, heads, seq_len, {self.head_dim}), "
+                f"but got {tuple(x.shape)}"
+            )
         seq_len = x.size(-2)
 
         # Validate position range

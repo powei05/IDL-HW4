@@ -66,16 +66,16 @@ class CausalSelfAttention(nn.Module):
         self.max_len       = max_len
         self.num_kv_groups = num_heads // num_kv_heads
         # TODO: Use your HW3P2 attention scaling.
-        self.scale         = NotImplementedError
+        self.scale         = self.head_dim ** -0.5
 
         # TODO: Adapt your HW3P2 projections to num_kv_heads.
 
         # Initialize your projections, all nn.Linear with bias=False
         # Project queries to d_model; keys and values use num_kv_heads.
-        self.q_proj   = NotImplementedError
-        self.k_proj   = NotImplementedError
-        self.v_proj   = NotImplementedError
-        self.out_proj = NotImplementedError
+        self.q_proj   = nn.Linear(d_model, d_model, bias=False)
+        self.k_proj   = nn.Linear(d_model, self.num_kv_heads * self.head_dim, bias=False)
+        self.v_proj   = nn.Linear(d_model, self.num_kv_heads * self.head_dim, bias=False)
+        self.out_proj = nn.Linear(d_model, d_model, bias=False)
 
         # Rotary position module (DO NOT MODIFY).
         self.rope = RotaryPositionalEncoding(
@@ -84,7 +84,7 @@ class CausalSelfAttention(nn.Module):
             base=rope_base,
         )
         # TODO: Use your HW3P2 attention dropout initialization.
-        self.attention_dropout = NotImplementedError
+        self.attention_dropout = nn.Dropout(dropout)
 
     def _split_heads(self, x: torch.Tensor, num_heads: int) -> torch.Tensor:
         '''
@@ -98,7 +98,13 @@ class CausalSelfAttention(nn.Module):
         '''
         # TODO: Adapt your HW3P2 head splitting to the supplied head count.
         batch_size, sequence_length, _ = x.shape
-        raise NotImplementedError
+        return x.reshape(
+            batch_size,
+            sequence_length,
+            num_heads,
+            self.head_dim   
+        ).transpose(1, 2)  # Shape: (batch_size, num_heads, seq_len, head_dim)
+        #raise NotImplementedError
 
     def _repeat_kv(self, x: torch.Tensor) -> torch.Tensor:
         '''
@@ -112,9 +118,10 @@ class CausalSelfAttention(nn.Module):
         # TODO (HW4): Implement key/value head repetition.
 
         # Repeat each head num_kv_groups times, aligned with its query group.
-        x = NotImplementedError
+        x = x.repeat_interleave(self.num_kv_groups, dim=1)  # Shape: (batch_size, num_heads, seq_len, head_dim)
+        return x
 
-        raise NotImplementedError
+        #raise NotImplementedError
 
     def _validate_cache(self, past_kv: KVCache, batch_size: int, dtype: torch.dtype, device: torch.device) -> int:
         '''
@@ -174,10 +181,10 @@ class CausalSelfAttention(nn.Module):
 
         # Use absolute query positions starting at past_length and key positions
         # starting at zero. Cached masks can be rectangular (target_len, source_len).
-        query_positions = NotImplementedError
-        key_positions   = NotImplementedError
-        causal_mask     = NotImplementedError
-        masked_scores   = NotImplementedError
+        query_positions = torch.arange(past_length, past_length + target_length, device=scores.device)
+        key_positions   = torch.arange(0, source_length, device=scores.device)
+        causal_mask     = query_positions[:, None] >= key_positions[None, :]
+        masked_scores   = masked_scores = scores.masked_fill(~causal_mask[None, None, :, :], minimum)
 
         # Keep validation and complete the mask calculations.
         if key_padding_mask is not None:
@@ -191,8 +198,8 @@ class CausalSelfAttention(nn.Module):
             if key_padding_mask.dtype != torch.bool:
                 raise ValueError("key_padding_mask must be Boolean")
             # TODO: Use your HW3P2 padding-mask broadcasting and application.
-            expanded_padding_mask = NotImplementedError
-            masked_scores = NotImplementedError
+            expanded_padding_mask = key_padding_mask[:, None, None, :]
+            masked_scores = masked_scores.masked_fill(expanded_padding_mask, minimum)
 
         if attn_mask is not None:
             expected_shape = (target_length, source_length)
@@ -202,8 +209,8 @@ class CausalSelfAttention(nn.Module):
                 raise ValueError("attn_mask must be on the input device")
             if attn_mask.dtype == torch.bool:
                 # TODO: Use your HW3P2 attention-mask broadcasting and application.
-                expanded_attention_mask = NotImplementedError
-                masked_scores = NotImplementedError
+                expanded_attention_mask = attn_mask[None, None, :, :]
+                masked_scores = masked_scores.masked_fill(expanded_attention_mask, minimum)
             elif torch.is_floating_point(attn_mask):
                 additive_mask = attn_mask[None, None, :, :].to(dtype=scores.dtype)
                 masked_scores = masked_scores + additive_mask
@@ -244,15 +251,17 @@ class CausalSelfAttention(nn.Module):
         # TODO: Adapt your HW3P2 forward pass with the HW4 steps below.
 
         # Project inputs
-        projected_query = NotImplementedError
-        projected_key   = NotImplementedError
-        projected_value = NotImplementedError
+        projected_query = self.q_proj(x)
+        projected_key   = self.k_proj(x)
+        projected_value = self.v_proj(x)
 
         # Reshape for multiple heads
         # Query and key/value do not use the same head count here
-        query = NotImplementedError
-        key   = NotImplementedError
-        value = NotImplementedError
+        query = self._split_heads(projected_query, self.num_heads)
+        key   = self._split_heads(projected_key, self.num_kv_heads)
+        value = self._split_heads(projected_value, self.num_kv_heads)
+        
+        
 
         # Read the cache length and check the context budget (DO NOT MODIFY)
         past_length = 0
@@ -270,18 +279,18 @@ class CausalSelfAttention(nn.Module):
             )
 
         # TODO (HW4): Apply your adapted RoPE to Q/K at the cached position offset.
-        rotated_query = NotImplementedError
-        rotated_key   = NotImplementedError
+        rotated_query = self.rope(query, start_pos=past_length)
+        rotated_key   = self.rope(key, start_pos=past_length)
 
         # HW4: Append the new keys and values to the cache.
         # Only the key is rotated, the value is stored as projected
         if past_kv is not None:
             past_key, past_value = past_kv
-            combined_key   = NotImplementedError
-            combined_value = NotImplementedError
+            combined_key   = torch.cat([past_key, rotated_key], dim=-2)
+            combined_value = torch.cat([past_value, value], dim=-2)
         else:
-            combined_key   = NotImplementedError
-            combined_value = NotImplementedError
+            combined_key   = rotated_key
+            combined_value = value
 
         # DO NOT MODIFY
         # Cache compact heads before repetition; do not reorder these blocks.
@@ -295,21 +304,27 @@ class CausalSelfAttention(nn.Module):
             present_kv = None
 
         # HW4: Repeat key/value heads for their query groups.
-        repeated_key   = NotImplementedError
-        repeated_value = NotImplementedError
+        repeated_key   = self._repeat_kv(combined_key)
+        repeated_value = self._repeat_kv(combined_value)
+        
 
         # Use your HW3P2 attention-score calculation and scaling.
-        scores        = NotImplementedError
-        scaled_scores = NotImplementedError
-        masked_scores = NotImplementedError
+        scores        = torch.matmul(rotated_query, repeated_key.transpose(-2, -1)) 
+        scaled_scores = scores * self.scale
+        masked_scores = self._apply_masks(
+            scaled_scores,
+            past_length=past_length,
+            key_padding_mask=key_padding_mask,
+            attn_mask=attn_mask,
+        )
 
         # TODO: Adapt your HW3P2 softmax to use float32 for half-precision
         # inputs, then cast probabilities back to the score dtype.
         if masked_scores.dtype in (torch.float16, torch.bfloat16):
-            float_probabilities = NotImplementedError
-            attention_probabilities = NotImplementedError
+            float_probabilities = torch.softmax(masked_scores.float(), dim=-1)
+            attention_probabilities = float_probabilities.to(dtype=masked_scores.dtype)
         else:
-            attention_probabilities = NotImplementedError
+            attention_probabilities = torch.softmax(masked_scores, dim=-1)
         # DO NOT MODIFY: zero probabilities for fully masked rows.
         attention_probabilities = torch.nan_to_num(
             attention_probabilities,
@@ -319,18 +334,19 @@ class CausalSelfAttention(nn.Module):
         # Use your HW3P2 head-averaged attention weights.
         # These are the weights you return, and they are taken before dropout
         # while the context below is computed from the dropped weights
-        average_attention_probabilities = NotImplementedError
+        average_attention_probabilities = attention_probabilities.mean(dim=1)
 
         # TODO: Use your HW3P2 attention dropout application.
-        dropped_probabilities = NotImplementedError
+        dropped_probabilities = self.attention_dropout(attention_probabilities)
 
         # Use your HW3P2 attention-weighted values.
-        context = NotImplementedError
+        context = torch.matmul(dropped_probabilities, repeated_value)
 
         # Use your HW3P2 head merging.
-        merged_context = NotImplementedError
+        merged_context = context.transpose(1, 2).reshape(batch_size, sequence_length, self.d_model)
 
         # Use your HW3P2 output projection.
-        output = NotImplementedError
+        output = self.out_proj(merged_context)
+        return output, average_attention_probabilities, present_kv
 
         raise NotImplementedError
