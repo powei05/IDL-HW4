@@ -374,7 +374,12 @@ class SequenceGenerator:
         sequences = x.unsqueeze(1).expand(
             batch_size, beam_width, seq_len
         ).clone()
-
+        if seq_len == self.max_length:
+            scores = torch.zeros(
+                (batch_size, beam_width),
+                device=x.device
+            )
+            return sequences, scores
         scores = torch.full(
             (batch_size, beam_width),
             float("-inf"),
