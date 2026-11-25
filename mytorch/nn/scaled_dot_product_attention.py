@@ -16,40 +16,47 @@ class ScaledDotProductAttention:
         
     
     def forward(self, Q, K, V, mask=None):
-        """
-        :param Q: Query matrix of shape (N, ..., H, L, E) where L is target sequence length
-        :param K: Key matrix of shape (N, ..., H, S, E) where S is source sequence length
-        :param V: Value matrix of shape (N, ..., H, S, Ev) where Ev is value dimension
-        :param mask: Boolean mask matrix of shape (N, ..., H, L, S) or broadcastable shape where 1/True indicates a position to ignore
-        :return: Output matrix of shape (N, ..., H, L, Ev)
-        """
-        # TODO: Implement forward pass
+        # Cache inputs for backward
         self.Q = Q
         self.K = K
         self.V = V
+
         # Calculate attention scores
         d_k = Q.shape[-1]
 
         scaled_dot_product = (
-            Q @ np.swapaxes(K, -2, -1) / np.sqrt(d_k)
-        )
-        
-        # Apply mask before softmax if provided
+            Q @ np.swapaxes(K, -2, -1)
+        ) / np.sqrt(d_k)
+
+        # Apply mask
         if mask is not None:
-            scaled_dot_product = np.where(mask, -np.inf, scaled_dot_product)
+            scaled_dot_product = np.where(
+                mask, -np.inf, scaled_dot_product
+            )
 
-        # Compute attention scores: 
-        # # Think about which dimension you should apply Softmax
-        exp_scores = np.exp(
-            scaled_dot_product - np.max(scaled_dot_product, axis = -1, keepdims = True)
+        # Identify fully masked rows
+        fully_masked = np.all(
+            np.isneginf(scaled_dot_product),
+            axis=-1,
+            keepdims=True
         )
-        self.attention_scores = self.softmax.forward(scaled_dot_product)
 
-        # Calculate final output
+        # Avoid NaN in softmax
+        safe_scores = np.where(
+            fully_masked, 0.0, scaled_dot_product
+        )
+
+        self.attention_scores = self.softmax.forward(safe_scores)
+
+        # Fully masked rows must have zero attention probability
+        self.attention_scores = np.where(
+            fully_masked, 0.0, self.attention_scores
+        )
+
+        # Calculate output
         output = self.attention_scores @ V
 
-        # Return final output
-        return  output
+        return output
         #raise NotImplementedError
     
     def backward(self, d_output):
