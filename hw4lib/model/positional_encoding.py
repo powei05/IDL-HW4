@@ -140,31 +140,21 @@ class RotaryPositionalEncoding(nn.Module):
         return torch.cat([-x_second, x_first], dim = -1)
         # raise NotImplementedError # Remove once implemented
 
-    def forward(self, q: torch.Tensor, k: torch.Tensor, offset: int = 0):
-        """
-        Forward pass for the RotaryPositionalEncoding.
-        Args:
-            q (torch.Tensor): Queries, shape (batch_size, num_heads, seq_len, head_dim)
-            k (torch.Tensor): Keys, shape (batch_size, num_heads, seq_len, head_dim)
-            offset     (int): Index of the first position. Defaults to 0.
-        Returns:
-            q (torch.Tensor): Rotated queries of the same shape
-            k (torch.Tensor): Rotated keys of the same shape
-        Errors:
-            - ValueError: If sequence length exceeds maximum length
-        """
-        # TODO: Implement forward
-        # Step 1: Get sequence length from the query tensor
-        seq_len = q.size(2)
-        # Step 2: Verify sequence length doesn't exceed maximum length, raise error if it does
-        if offset + seq_len > self.cos.size(2):
-            raise ValueError(f"Sequence length {offset + seq_len} exceeds the maximum length {self.cos.size(2)}")
-        # Step 3: Slice the cos and sin tables to the positions in use
-        cos = self.cos[:, :, offset:offset + seq_len, :]
-        sin = self.sin[:, :, offset:offset + seq_len, :]
+    def forward(self, x: torch.Tensor, start_pos: int = 0):
+        # Get sequence length
+        seq_len = x.size(-2)
 
-        q_rotated = q * cos + self.rotate_half(q) * sin
-        k_rotated = k * cos + self.rotate_half(k) * sin
-        return q_rotated, k_rotated
+        # Validate position range
+        if start_pos < 0 or start_pos + seq_len > self.cos.size(2):
+            raise ValueError("Sequence length exceeds maximum length")
+
+        # Get positional rotation tables
+        cos = self.cos[:, :, start_pos:start_pos + seq_len, :]
+        sin = self.sin[:, :, start_pos:start_pos + seq_len, :]
+
+        # Apply rotary positional encoding
+        x_rotated = x * cos + self.rotate_half(x) * sin
+
+        return x_rotated
         # Step 4: Rotate q and k, where rotating x is  x * cos + self.rotate_half(x) * sin
         #raise NotImplementedError # Remove once implemented
