@@ -367,6 +367,111 @@ class SequenceGenerator:
             raise ValueError("repeat_penalty must be > 0")
 
         # TODO: Implement beam search if you choose to.
+        batch_size, seq_len = x.shape
+        vocab_size = self.tokenizer.vocab_size
+        eos_id = self.tokenizer.eos_id
+
+        sequences = x.unsqueeze(1).expand(
+            batch_size, beam_width, seq_len
+        ).clone()
+
+        scores = torch.full(
+            (batch_size, beam_width),
+            float("-inf"),
+            device=x.device
+        )
+
+        scores[:, 0] = 0.0
+
+        finished = torch.zeros(
+            (batch_size, beam_width),
+            dtype=torch.bool,
+            device=x.device
+        )
+
+        for _ in range(self.max_length - seq_len):
+
+            if finished.all():
+                break
+
+            # Flatten beams for full-prefix scoring
+            flat_sequences = sequences.reshape(
+                batch_size * beam_width, -1
+            )
+
+            next_scores = self.score_fn(flat_sequences)
+
+            next_scores = next_scores.reshape(
+                batch_size, beam_width, vocab_size
+            )
+
+            # Apply repetition penalty
+            next_scores = self._apply_repeat_penalty(
+                next_scores,
+                sequences,
+                repeat_penalty
+            )
+
+            # Compute next-token log probabilities
+            log_probs = torch.log_softmax(
+                next_scores, dim=-1
+            )
+
+            # Finished beams can only generate EOS
+            log_probs = log_probs.masked_fill(
+                finished.unsqueeze(-1),
+                float("-inf")
+            )
+
+            log_probs[:, :, eos_id] = torch.where(
+                finished,
+                torch.zeros_like(log_probs[:, :, eos_id]),
+                log_probs[:, :, eos_id]
+            )
+
+            # Accumulate beam scores
+            candidate_scores = scores.unsqueeze(-1) + log_probs
+
+            # Flatten all beam-token candidates
+            candidate_scores = candidate_scores.reshape(
+                batch_size, beam_width * vocab_size
+            )
+
+            # Select the best candidates
+            scores, top_indices = torch.topk(
+                candidate_scores,
+                k=beam_width,
+                dim=-1
+            )
+
+            # Recover parent beam and token indices
+            beam_indices = top_indices // vocab_size
+            next_tokens = top_indices % vocab_size
+
+            # Gather selected parent sequences
+            sequences = sequences.gather(
+                dim=1,
+                index=beam_indices.unsqueeze(-1).expand(
+                    -1, -1, sequences.size(-1)
+                )
+            )
+
+            # Gather finished flags from parent beams
+            finished = finished.gather(
+                dim=1,
+                index=beam_indices
+            )
+
+            # Append selected tokens
+            sequences = torch.cat(
+                [sequences, next_tokens.unsqueeze(-1)],
+                dim=-1
+            )
+
+            # Update finished flags
+            finished = finished | (next_tokens == eos_id)
+
+        return sequences, scores
         #raise NotImplementedError
 
     def generate_sample(
