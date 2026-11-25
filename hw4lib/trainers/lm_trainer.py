@@ -605,7 +605,7 @@ class LMTrainer(BaseTrainer):
                     temperature=temperature,
                     top_k=top_k,
                     top_p=effective_top_p,
-                    repetition_penalty=repeat_penalty,
+                    repeat_penalty=repeat_penalty,
                     seed=seed
                 )
                 #raise NotImplementedError
@@ -615,7 +615,7 @@ class LMTrainer(BaseTrainer):
                 beam_sequences, beam_scores = generator.generate_beam(
                     prompts,
                     beam_width=beam_width,
-                    repetition_penalty=repeat_penalty
+                    repeat_penalty=repeat_penalty
                 )
                 #raise NotImplementedError
                 # Take best beam
@@ -626,7 +626,7 @@ class LMTrainer(BaseTrainer):
                 # repeat penalty.
                 sequences, scores =     generator.generate_greedy(
                     prompts,
-                    repetition_penalty=repeat_penalty
+                    repeat_penalty=repeat_penalty
                 )
                 #raise NotImplementedError
 
