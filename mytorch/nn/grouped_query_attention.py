@@ -118,7 +118,7 @@ class GroupedQueryAttention:
         v = np.repeat(v, self.num_kv_groups, axis=1)
 
         # Combine padding and causal masks
-        mask = None
+        mask = self._merge_masks(key_padding_mask, attn_mask)
 
         # Apply attention
         attn_outputs = self.attention.forward(q, k, v, mask)
