@@ -115,7 +115,7 @@ class RotaryPositionalEncoding(nn.Module):
         positions = torch.arange(max_len, dtype = torch.float32)
 
         angles = torch.outer(positions, inv_freq)
-        angles = torch.cat([angles, angles], dim = -1)
+        angles = torch.repeat_interleave(angles, repeats=2, dim=-1)
 
         cos = angles.cos().unsqueeze(0).unsqueeze(0)
         sin = angles.sin().unsqueeze(0).unsqueeze(0)
@@ -134,10 +134,13 @@ class RotaryPositionalEncoding(nn.Module):
             torch.Tensor: Rotated tensor of the same shape
         """
         # TODO: Implement rotate_half
-        half = x.size(-1) // 2
-        x_first = x[..., :half]
-        x_second = x[..., half:]
-        return torch.cat([-x_second, x_first], dim = -1)
+        x_even = x[..., ::2]
+        x_odd = x[..., 1::2]
+
+        return torch.stack(
+            (-x_odd, x_even),
+            dim=-1
+        ).flatten(-2)
         # raise NotImplementedError # Remove once implemented
 
     def forward(self, x: torch.Tensor, start_pos: int = 0):
