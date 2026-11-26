@@ -109,7 +109,7 @@ def inject_lora(model, *, rank, alpha, dropout, targets=("q_proj", "v_proj")):
         setattr(parent, child_name, lora_module)
     #raise NotImplementedError("Complete inject_lora")
     for name, param in model.named_parameters():
-        param.requires_grad(name.endswith((".lora_A", ".lora_B")))
+        param.requires_grad=name.endswith((".lora_A", ".lora_B"))
     return [name for name, _ in new_modules]
 
 def _adapter_config(model):

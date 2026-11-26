@@ -58,7 +58,7 @@ class SFTDataset(Dataset):
 
     def __getitem__(self, index):
         # TODO: Return one example without allowing the caller to alter stored tensors.
-        example = self.eamples[index]
+        example = self.examples[index]
         return {
             "input_ids": example["input_ids"].clone(),
             "labels": example["labels"].clone(),
@@ -72,7 +72,7 @@ class SFTDataset(Dataset):
         # TODO: Pad each field to the longest example in this batch
         input_ids = torch.nn.utils.rnn.pad_sequence(
             [example["input_ids"] for example in examples],
-            btch_first = True,
+            batch_first = True,
             padding_value = self.tokenizer.eos_id
         )
         labels = torch.nn.utils.rnn.pad_sequence(

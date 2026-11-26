@@ -29,6 +29,15 @@ class SFTTrainer(BaseTrainer):
             ignore_index = -100,
             reduction = "sum"
         )  # TODO
+    def _prepare_batch(self, batch):
+        inputs = batch["input_ids"].to(self.device)
+        labels = batch["labels"].to(self.device)
+        count = int((labels != -100).sum().item())
+
+        if count == 0:
+            raise ValueError("Batch has no supervised response tokens")
+
+        return inputs, labels, count
 
     def _init_experiment(self, run_name, config_file):
         """Provided: use a new output directory, or explicitly resume an existing run."""
@@ -373,8 +382,8 @@ class SFTTrainer(BaseTrainer):
 
             if improved:
                 # Save best.pth using the existing checkpoint method
-                pass
+                self.save_checkpoint("best.pth")
 
         # Save last.pth and write history.json
         # Use the existing trainer methods here.
-        raise NotImplementedError("Complete train")
+        # raise NotImplementedError("Complete train")
